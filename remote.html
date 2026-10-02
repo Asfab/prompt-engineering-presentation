@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>Slide Remote</title>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    /* ── Reset ─────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    /* ── Tokens ────────────────────────────── */
+    :root {
+      --bg:          #0C0C0E;
+      --surface:     #18181B;
+      --surface-2:   #27272A;
+      --border:      #3F3F46;
+      --text:        #FAFAFA;
+      --text-2:      #A1A1AA;
+      --text-3:      #71717A;
+      --primary:     #6366F1;
+      --primary-dim: #312E81;
+      --green:       #22C55E;
+      --red:         #EF4444;
+      --font:        -apple-system, 'SF Pro Display', 'Inter', sans-serif;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      -webkit-font-smoothing: antialiased;
+      overflow: hidden;
+    }
+
+    /* ── Layout ────────────────────────────── */
+    .shell {
+      height: 100dvh; /* dynamic viewport height — handles mobile chrome bar */
+      display: flex;
+      flex-direction: column;
+      padding:
+        max(env(safe-area-inset-top),  1rem)
+        max(env(safe-area-inset-right), 1.25rem)
+        max(env(safe-area-inset-bottom), 1rem)
+        max(env(safe-area-inset-left),  1.25rem);
+      gap: 0.75rem;
+    }
+
+    /* ── Status bar ────────────────────────── */
+    .status-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+
+    .status-pill {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 100px;
+      padding: 0.3rem 0.75rem;
+    }
+
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--red);
+      transition: background 0.4s;
+      flex-shrink: 0;
+    }
+    .dot.on  { background: var(--green); }
+
+    .status-text {
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: var(--text-2);
+      letter-spacing: 0.04em;
+    }
+
+    .slide-fraction {
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: var(--text-3);
+      letter-spacing: 0.04em;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* ── Big counter ───────────────────────── */
+    .counter-row {
+      display: flex;
+      align-items: baseline;
+      gap: 0.1em;
+      flex-shrink: 0;
+      line-height: 1;
+    }
+
+    .counter-current {
+      font-size: 5rem;
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      color: var(--text);
+      line-height: 1;
+    }
+
+    .counter-total {
+      font-size: 2rem;
+      font-weight: 500;
+      color: var(--text-3);
+      letter-spacing: -0.02em;
+    }
+
+    /* ── Slide title ───────────────────────── */
+    .slide-title {
+      font-size: 1.2rem;
+      font-weight: 700;
+      color: var(--text);
+      line-height: 1.3;
+      flex-shrink: 0;
+    }
+
+    /* ── Timers ─────────────────────────────── */
+    .time-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.65rem;
+      flex-shrink: 0;
+    }
+
+    .time-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 0.6rem 0.9rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+    }
+
+    .time-label {
+      font-size: 0.6rem;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--text-3);
+    }
+
+    .time-value {
+      font-size: 1.35rem;
+      font-weight: 700;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -0.02em;
+      line-height: 1;
+    }
+
+    .time-value.warning { color: #F59E0B; }
+    .time-value.danger  { color: var(--red); }
+
+    /* ── Progress bar ──────────────────────── */
+    .progress-track {
+      height: 3px;
+      background: var(--surface-2);
+      border-radius: 2px;
+      flex-shrink: 0;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--primary), #A78BFA);
+      border-radius: 2px;
+      transition: width 0.35s ease;
+      width: 0%;
+    }
+
+    /* ── Notes ─────────────────────────────── */
+    .notes-wrap {
+      flex: 1;
+      min-height: 0;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 1rem 1.1rem;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .notes-label {
+      font-size: 0.62rem;
+      font-weight: 800;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--text-3);
+      margin-bottom: 0.65rem;
+      flex-shrink: 0;
+    }
+
+    .notes-body {
+      font-size: 0.85rem;
+      line-height: 1.75;
+      white-space: pre-wrap;
+      color: var(--text-2);
+      overflow-y: auto;
+      flex: 1;
+      /* Custom scrollbar */
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+
+    .notes-body::-webkit-scrollbar        { width: 4px; }
+    .notes-body::-webkit-scrollbar-thumb  { background: var(--border); border-radius: 2px; }
+
+    /* ── Nav buttons ───────────────────────── */
+    .nav {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.65rem;
+      flex-shrink: 0;
+    }
+
+    .btn {
+      height: 5rem;
+      border: none;
+      border-radius: 16px;
+      font-size: 1.05rem;
+      font-weight: 800;
+      letter-spacing: 0.02em;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      transition: transform 0.08s, filter 0.15s;
+      -webkit-tap-highlight-color: transparent;
+      -webkit-touch-callout: none;
+      user-select: none;
+    }
+
+    .btn:active:not(:disabled)  { transform: scale(0.95); }
+    .btn:disabled               { opacity: 0.25; cursor: default; }
+
+    .btn-prev {
+      background: var(--surface-2);
+      color: var(--text-2);
+      border: 1px solid var(--border);
+    }
+
+    .btn-next {
+      background: var(--primary);
+      color: #fff;
+    }
+
+    .btn-next:active:not(:disabled) { filter: brightness(0.88); }
+    .btn-prev:active:not(:disabled) { filter: brightness(0.8); }
+
+    /* ── Animations ────────────────────────── */
+    @keyframes fadeSlide {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .slide-title,
+    .notes-body {
+      animation: fadeSlide 0.25s ease forwards;
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+
+    <!-- Status bar -->
+    <div class="status-bar">
+      <div class="status-pill">
+        <div class="dot" id="dot"></div>
+        <span class="status-text" id="statusText">Connecting…</span>
+      </div>
+      <span class="slide-fraction" id="fraction">— / —</span>
+    </div>
+
+    <!-- Big slide counter -->
+    <div class="counter-row">
+      <span class="counter-current" id="counterCurrent">—</span>
+      <span class="counter-total" id="counterTotal">/—</span>
+    </div>
+
+    <!-- Current slide title -->
+    <div class="slide-title" id="slideTitle">Loading…</div>
+
+    <!-- Timers -->
+    <div class="time-row">
+      <div class="time-card">
+        <span class="time-label">This Slide</span>
+        <span class="time-value" id="slideTimer">0:00</span>
+      </div>
+      <div class="time-card">
+        <span class="time-label">Total</span>
+        <span class="time-value" id="totalTimer">0:00</span>
+      </div>
+    </div>
+
+    <!-- Progress -->
+    <div class="progress-track">
+      <div class="progress-fill" id="progressFill"></div>
+    </div>
+
+    <!-- Presenter notes -->
+    <div class="notes-wrap">
+      <div class="notes-label">Presenter Notes</div>
+      <div class="notes-body" id="notesBody">Waiting for connection…</div>
+    </div>
+
+    <!-- Navigation -->
+    <div class="nav">
+      <button class="btn btn-prev" id="btnPrev" onclick="nav('prev')">← Prev</button>
+      <button class="btn btn-next" id="btnNext" onclick="nav('next')">Next →</button>
+    </div>
+
+  </div>
+
+  <script>
+    // ── State ────────────────────────────────────────────────────────────────
+    let slides = []
+    let current = 0
+
+    // ── Timers ───────────────────────────────────────────────────────────────
+    let sessionStart  = Date.now()
+    let slideStart    = Date.now()
+    let slideAccum    = {}   // index → ms accumulated before current visit
+
+    function fmt(ms) {
+      const s = Math.floor(ms / 1000)
+      const m = Math.floor(s / 60)
+      return `${m}:${String(s % 60).padStart(2, '0')}`
+    }
+
+    function tickTimers() {
+      const slideMs = (slideAccum[current] || 0) + (Date.now() - slideStart)
+      const totalMs = Date.now() - sessionStart
+
+      const slideEl = document.getElementById('slideTimer')
+      const totalEl = document.getElementById('totalTimer')
+
+      slideEl.textContent = fmt(slideMs)
+      totalEl.textContent = fmt(totalMs)
+
+      // Colour cues: amber > 2 min on slide, red > 30 min total
+      slideEl.className = 'time-value' + (slideMs > 120000 ? ' warning' : '')
+      totalEl.className = 'time-value' + (totalMs > 1800000 ? ' danger' : '')
+    }
+
+    setInterval(tickTimers, 1000)
+
+    function onSlideChange(newIndex) {
+      // Accumulate time spent on slide we're leaving
+      slideAccum[current] = (slideAccum[current] || 0) + (Date.now() - slideStart)
+      current    = newIndex
+      slideStart = Date.now()
+      tickTimers()
+      updateUI()
+    }
+
+    // ── Socket ───────────────────────────────────────────────────────────────
+    const socket = io({ reconnectionDelay: 1000, reconnectionDelayMax: 5000 })
+
+    socket.on('connect',    () => setConnected(true))
+    socket.on('disconnect', () => setConnected(false))
+
+    socket.on('slide:sync', ({ index, total }) => {
+      current    = index
+      slideStart = Date.now()
+      updateUI()
+    })
+
+    socket.on('slide:change', ({ index }) => {
+      onSlideChange(index)
+    })
+
+    // ── Data ─────────────────────────────────────────────────────────────────
+    fetch('/api/slides')
+      .then(r => r.json())
+      .then(data => {
+        slides = data
+        updateUI()
+      })
+      .catch(() => {
+        document.getElementById('notesBody').textContent = 'Could not load slide data.'
+      })
+
+    // ── Navigation ───────────────────────────────────────────────────────────
+    function nav(dir) {
+      socket.emit(dir === 'next' ? 'slide:next' : 'slide:prev')
+    }
+
+    // Keyboard support when phone is plugged in or tested on desktop
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); nav('next') }
+      if (e.key === 'ArrowLeft')                    { e.preventDefault(); nav('prev') }
+    })
+
+    // ── UI helpers ───────────────────────────────────────────────────────────
+    function setConnected(ok) {
+      document.getElementById('dot').className          = 'dot' + (ok ? ' on' : '')
+      document.getElementById('statusText').textContent = ok ? 'Connected' : 'Disconnected'
+    }
+
+    function updateUI() {
+      const total = slides.length
+      const slide = slides[current] || null
+
+      // Counter & fraction
+      document.getElementById('counterCurrent').textContent = current + 1
+      document.getElementById('counterTotal').textContent   = '/' + (total || '—')
+      document.getElementById('fraction').textContent       = `${current + 1} / ${total || '—'}`
+
+      // Progress bar
+      if (total > 1) {
+        const pct = ((current + 1) / total) * 100
+        document.getElementById('progressFill').style.width = pct + '%'
+      }
+
+      // Title & notes (re-trigger animation by cloning node)
+      const titleEl = document.getElementById('slideTitle')
+      const notesEl = document.getElementById('notesBody')
+      titleEl.style.animation = 'none'
+      notesEl.style.animation = 'none'
+      requestAnimationFrame(() => {
+        titleEl.style.animation = ''
+        notesEl.style.animation = ''
+        titleEl.textContent = slide ? slide.title : '—'
+        notesEl.innerText = slide ? slide.notes : '—'
+        notesEl.scrollTop   = 0
+      })
+
+      // Button states
+      document.getElementById('btnPrev').disabled = current <= 0
+      document.getElementById('btnNext').disabled = current >= total - 1
+    }
+  </script>
+</body>
+</html>
